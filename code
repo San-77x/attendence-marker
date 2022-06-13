@@ -1,0 +1,224 @@
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+
+#define button_1 0
+#define push_switch_min 2
+#define push_switch_plus 14
+#define max_students 100
+
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+
+#define ON_Board_LED 2  //--> Defining an On Board LED, used for indicators when the process of connecting to a wifi router50
+
+const char* ssid = "san"; //--> Your wifi name or SSID
+const char* password = "12345678"; //--> Your wifi password.
+const char* host = "script.google.com";
+const int httpsPort = 443;
+
+
+
+String GAS_ID = "AKfycbyCvXR7BTBFxR0AS_J1wqJuHWtAevS9VSCkU4O4N8UL1s03BPZFqZcpn6e4IOBVETX6";
+
+void setup() {
+  pinMode(button_1 , INPUT_PULLUP);
+  pinMode(push_switch_min , INPUT_PULLUP);
+  pinMode(push_switch_plus , INPUT_PULLUP);
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  lcd.noBlink();
+  lcd.setCursor(0, 0);
+  lcd.print("ATNDNCE MARKER");
+  lcd.setCursor(0, 1);
+  lcd.print("CONNECTING...");
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+  Serial.println("");
+  pinMode(ON_Board_LED, OUTPUT);
+  digitalWrite(ON_Board_LED, HIGH);
+  Serial.print("Connecting");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    digitalWrite(ON_Board_LED, LOW);
+    delay(250);
+    digitalWrite(ON_Board_LED, HIGH);
+    delay(250);
+  }
+  lcd.setCursor(0, 1);
+  lcd.print("WIFI CONNECTED");
+  digitalWrite(ON_Board_LED, HIGH);
+  Serial.println("");
+  Serial.print("Successfully connected to : ");
+  Serial.println(ssid);
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
+  
+}
+
+boolean current_state = false;
+int current_rollNo = 0;
+int rollNos[max_students];
+int rn_index = 0;
+int absentees[max_students];
+int ab_index = 0;
+
+
+int search_item_in_array( int item, int total_items) {
+  int i = 0;
+  while (i < total_items && item != absentees[i]) {
+    i++;
+  }
+  if (i < total_items) {
+    return (i + 1);
+  } else {
+    return -1;
+  }
+};
+
+void delete_item_from_array( int index, int total) {
+  for (int i = index; i < total; ++i)
+    absentees[i] = absentees[i + 1];
+};
+
+String data_1 = "";
+String data_2 = "";
+
+void display_lcd(String data, int line) {
+
+  if (line == 0) {
+    if (!data.equals(data_1)) {
+      lcd.clear();
+      lcd.setCursor(0, 1);
+      lcd.print(data_2);
+      lcd.setCursor(0, 0);
+      lcd.print(data);
+      data_1 = data;
+    }
+  }
+  else {
+    if (!data.equals(data_2)) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(data_1);
+      lcd.setCursor(0, 1);
+      lcd.print(data);
+      data_2 = data;
+    }
+  }
+}
+
+long int debounce_time = 0;
+int minus_btn = HIGH;
+int plus_btn = HIGH;
+int main_btn = HIGH;
+int prev_minus_btn = HIGH;
+int prev_plus_btn = HIGH;
+int prev_main_btn = HIGH;
+
+
+void loop() {
+  minus_btn = HIGH;
+  plus_btn = HIGH;
+  main_btn = HIGH;
+  if ((millis() - debounce_time) > 200) {
+    main_btn = digitalRead(button_1);
+    plus_btn = digitalRead(push_switch_plus);
+    minus_btn = digitalRead(push_switch_min);
+    debounce_time = millis();
+  }
+
+
+  // ON CONDITION
+  if (!current_state) {
+    while (digitalRead(button_1) == HIGH) {
+      delay(10);
+    }
+    current_state = true;
+    delay(100);
+    main_btn = HIGH;
+  }
+  // OFF CONDITION
+  if (current_state) {
+    if (main_btn == LOW && plus_btn == LOW) {
+      current_state = false;
+      if (ab_index > 0)
+        display_lcd("UPLOADING DATA", 0);
+      display_lcd("TO GOOGLE SHEET", 1);
+    { for (int k = 0; k < ab_index; k ++ ) {
+          Serial.println("SENDING ABS: " + String(absentees[k] + 1));
+          sendData(String(absentees[k] + 1));
+        }
+      }
+      ab_index = 0;
+      current_rollNo = 0;
+      current_state = false;
+      display_lcd("ATNDNCE MARKER", 0);
+      display_lcd("WIFI CONNECTED" , 1);
+      return;
+    }
+  }
+  String text_u;
+  rollNos[current_rollNo] == 1 ?  text_u = " ABSENT" :  text_u = " PRESENT";
+  display_lcd("R-NO: " + String(current_rollNo + 1) + text_u , 0);
+  if (ab_index == 0) {
+    display_lcd("No Absentees", 1);
+  };
+  if (ab_index > 0) {
+    String text = "";
+    for (int i = 0; i < ab_index; i++) {
+      text = text + String(absentees[i] + 1) + ",";
+    }
+    display_lcd(text, 1);
+  }
+  if (plus_btn == LOW && (current_rollNo + 1) < max_students) {
+    current_rollNo ++;
+  }
+  if (minus_btn == LOW && current_rollNo > 0) {
+    current_rollNo --;
+  }
+  if (main_btn == LOW) {
+    if ( rollNos[current_rollNo] == 0) {
+      rollNos[current_rollNo] = 1;
+      absentees[ab_index] = current_rollNo;
+      ab_index++;
+    } else {
+      rollNos[current_rollNo] = 0;
+      int loc = search_item_in_array( current_rollNo, ab_index );
+      delete_item_from_array( loc - 1, ab_index);
+      ab_index -= 1;
+    }
+  }
+}
+
+void sendData(String roll_no) {
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  while (!client.connect(host, httpsPort)) {
+    delay(500);
+  }
+  String url = "/macros/s/" + GAS_ID + "/exec?value1=" + roll_no;
+  client.print(String("GET ") + url + " HTTP/1.1\r\n" +
+               "Host: " + host + "\r\n" +
+               "User-Agent: BuildFailureDetectorESP8266\r\n" +
+               "Connection: close\r\n\r\n");
+  Serial.println("request sent");
+  while (client.connected()) {
+    String line = client.readStringUntil('\n');
+    if (line == "\r") {
+      break;
+    }
+  }
+  String line = client.readStringUntil('\n');
+  Serial.println(line);
+  if (line.startsWith("{\"state\":\"success\"")) {
+    
+  }
+
+}
